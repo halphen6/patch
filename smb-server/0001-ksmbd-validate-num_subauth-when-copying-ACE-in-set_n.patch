@@ -34,6 +34,7 @@ the ACE, matching the gate already enforced by parse_dacl().
 
 Signed-off-by: Haofeng Li <lihaofeng@kylinos.cn>
 Reviewed-by: ChenXiaoSong <chenxiaosong@kylinos.cn>
+Suggested-by: Namjae Jeon <linkinjeon@kernel.org>
 ---
  fs/smb/server/smbacl.c | 5 +++++
  1 file changed, 5 insertions(+)

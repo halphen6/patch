@@ -7,8 +7,7 @@ Two ksmbd paths trusted attacker-controlled fields from a stored security
 descriptor and lacked the validation their sibling functions already
 enforce. Both are reachable by an authenticated client via SMB2_SET_INFO /
 SMB2_QUERY_INFO and both are fixed by adding the same gate the surrounding
-code uses. The patches are independent and can be applied in either order;
-the order below matches the original commit history.
+code uses. The patches are independent and can be applied in either order
 
 Patch 1 rejects DACLs smaller than struct smb_acl before a size subtraction
 that underflows (sizeof() is unsigned), which otherwise let a malformed SD
@@ -21,14 +20,14 @@ num_subauth otherwise drove an out-of-bounds heap read in
 set_posix_acl_entries_dacl().
 
 Changes since v1 [1]:
-  - Pick up Reviewed-by tags from ChenXiaoSong on both patches.
+  - Use goto instead of break in this version
   - Send the two related ksmbd hardening fixes as one series.
 
 [1] https://lore.kernel.org/all/tencent_160379D932900C07E87A916577DA03F73609@qq.com/
 
 Haofeng Li (2):
-  ksmbd: reject undersized DACLs before parsing ACEs
   ksmbd: validate num_subauth when copying ACE in set_ntacl_dacl
+  ksmbd: reject undersized DACLs before parsing ACEs
 
  fs/smb/server/smbacl.c | 12 +++++++++++-
  1 file changed, 11 insertions(+), 1 deletion(-)

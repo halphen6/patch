@@ -1,0 +1,20 @@
+From ddc4071c4c73d252c587853d8e88e5e9cae5bb75 Mon Sep 17 00:00:00 2001
+From: Haofeng Li <lihaofeng@kylinos.cn>
+Date: Mon, 29 Jun 2026 11:08:37 +0800
+Subject: [PATCH 0/4] *** SUBJECT HERE ***
+
+*** BLURB HERE ***
+
+Haofeng Li (4):
+  ksmbd: fix out-of-bounds read in ksmbd_compare_user()
+  ksmbd: reject guest sessions when signing is required
+  smb: ksmbd: use opener creds for duplicate extents
+  ksmbd: require read attributes for more QueryInfo classes
+
+ fs/smb/server/mgmt/user_config.c |  2 ++
+ fs/smb/server/smb2pdu.c          | 55 +++++++++++++++++++++++++++-----
+ 2 files changed, 49 insertions(+), 8 deletions(-)
+
+-- 
+2.25.1
+

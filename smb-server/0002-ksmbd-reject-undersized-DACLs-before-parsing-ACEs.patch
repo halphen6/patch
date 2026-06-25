@@ -1,7 +1,8 @@
-From 16018090de7553be1870e92bcf875396213f44a4 Mon Sep 17 00:00:00 2001
+From 33cd8d59e3bf63b03a808a749de4cc782122725b Mon Sep 17 00:00:00 2001
 From: Haofeng Li <lihaofeng@kylinos.cn>
 Date: Mon, 22 Jun 2026 20:37:46 +0800
-Subject: [PATCH v1 1/2] ksmbd: reject undersized DACLs before parsing ACEs
+Subject: [PATCH v2 resend 2/2] ksmbd: reject undersized DACLs before parsing
+ ACEs
 
 parse_dacl() limits the attacker-controlled ACE count by comparing it
 with the number of minimal ACEs that fit in the DACL size. The DACL size
@@ -34,7 +35,7 @@ Reviewed-by: ChenXiaoSong <chenxiaosong@kylinos.cn>
  1 file changed, 6 insertions(+), 1 deletion(-)
 
 diff --git a/fs/smb/server/smbacl.c b/fs/smb/server/smbacl.c
-index 340ea98fa494..fc9937cedb01 100644
+index 693a550fbe34..b135133c2609 100644
 --- a/fs/smb/server/smbacl.c
 +++ b/fs/smb/server/smbacl.c
 @@ -374,6 +374,7 @@ static void parse_dacl(struct mnt_idmap *idmap,

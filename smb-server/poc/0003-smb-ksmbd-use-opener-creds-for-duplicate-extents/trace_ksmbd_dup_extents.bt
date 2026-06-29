@@ -1,0 +1,18 @@
+/*
+ * bpftrace helper for observing the credential context used by the vulnerable
+ * ksmbd path. Run on the ksmbd server while triggering ksmbd_dup_extents_poc
+ * from a CIFS client.
+ *
+ * Vulnerable behavior: vfs_clone_file_range/vfs_copy_file_range is entered
+ * from a ksmbd worker with uid 0 instead of the SMB opener's mapped Unix uid.
+ */
+
+kprobe:vfs_clone_file_range
+{
+	printf("%s comm=%s pid=%d uid=%d gid=%d\n", probe, comm, pid, uid, gid);
+}
+
+kprobe:vfs_copy_file_range
+{
+	printf("%s comm=%s pid=%d uid=%d gid=%d\n", probe, comm, pid, uid, gid);
+}

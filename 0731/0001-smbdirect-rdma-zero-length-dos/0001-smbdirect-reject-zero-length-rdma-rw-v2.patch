@@ -1,0 +1,130 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Haofeng Li <lhf@redhat.com>
+Date: Fri, 31 Jul 2026 12:00:00 +0800
+Subject: [PATCH] smbdirect: reject zero-length RDMA R/W transfers
+
+An authenticated remote client that reaches ksmbd over the SMBDirect
+(RDMA) transport can drive a ksmbd-io work item into an unrecoverable
+wait_for_completion(), permanently freezing that connection's request
+processing. Repeating the attack exhausts the shared ksmbd-io
+workqueue: a deterministic, unbounded service-level denial of service.
+
+Attack chain (SMB2 WRITE; READ is symmetric with Length == 0):
+
+  1. The client authenticates and opens an SMBDirect connection.
+  2. It sends an SMB2 WRITE with Channel = RDMA_V1 or
+     RDMA_V1_INVALIDATE, Length = 0, DataOffset = 0, RemainingBytes
+     = 0, and at least one buffer descriptor, so ch_count >= 1 and
+     smb2_set_remote_key_for_rdma() is satisfied.
+  3. smb2_write() takes length = le32_to_cpu(req->RemainingBytes) on
+     the RDMA path and never rejects length == 0.
+  4. smb2_write_rdma_channel() calls kvzalloc(length); for length ==
+     0 that returns the non-NULL ZERO_SIZE_PTR, so the !data_buf
+     guard does not trigger, and it calls ksmbd_conn_rdma_read() with
+     buflen == 0.
+  5. smbdirect_connection_rdma_xmit(buf_len == 0): the descriptor
+     walk breaks on the first iteration ("if (!buf_len) break;"), so
+     desc_num == 0 and first_wr stays NULL.
+  6. ib_post_send(qp, NULL, NULL) posts no work request and produces
+     no completion entry (CQE).
+  7. msg = list_last_entry(&msg_list, ...) dereferences an empty
+     list head (undefined behaviour on paper).
+  8. wait_for_completion(&completion) blocks forever: the only
+     complete() is in the CQE handler, which can never fire. The
+     wait is TASK_UNINTERRUPTIBLE with no timeout, so the ksmbd-io
+     worker handling the request is stuck in D state.
+  9. Each such request pins one ksmbd-io worker; repeat to exhaust
+     the workqueue.
+
+SMB2 READ reaches the same xmit point with buf_len == 0 via Length ==
+0: ksmbd_vfs_read() returns 0 bytes and the (nbytes == 0 && length !=
+0) end-of-file check does not fire for length == 0, so
+smb2_read_rdma_channel() is still called with nbytes == 0.
+
+Neither smb2_write() nor smb2_read() rejects a zero length on the
+RDMA path, and smbdirect_connection_rdma_xmit() relies on the CQE
+handler to complete an on-stack completion that is never signalled
+when no descriptor is walked.
+
+Fix it at the source. A zero-length RDMA read/write is a legitimate
+no-op: once the descriptor walk yields desc_num == 0, return success
+immediately (or -EINVAL if bytes were requested but no descriptor was
+provided, i.e. buf_len > 0 with desc_num == 0). This removes both the
+permanent wait and the empty-list dereference. As defence-in-depth,
+also make smb2_read()/smb2_write() reject a zero transfer length up
+front on the RDMA path with "goto out", so the request never reaches
+the kvzalloc(0) -> ZERO_SIZE_PTR propagation. (Without the goto the
+earlier guard only set err and still fell through to the hang.)
+
+Verified end to end against an unpatched ksmbd over a software iWARP
+(siw) link: a crafted zero-length RDMA WRITE freezes a ksmbd-io
+worker in D state, with the stack pinned in wait_for_completion()
+inside smbdirect_connection_rdma_xmit(); normal RDMA read/write of
+non-zero length is unaffected. With the fix the same request returns
+immediately and the server stays responsive.
+
+Signed-off-by: Haofeng Li <lhf@redhat.com>
+---
+ fs/smb/server/smb2pdu.c | 16 ++++++++++++++++
+ fs/smb/smbdirect/rw.c   | 11 +++++++++++
+ 2 files changed, 27 insertions(+)
+
+diff --git a/fs/smb/server/smb2pdu.c b/fs/smb/server/smb2pdu.c
+index c1ba5e01aa7f..0c1096b9abaf 100644
+--- a/fs/smb/server/smb2pdu.c
++++ b/fs/smb/server/smb2pdu.c
+@@ -7421,6 +7421,14 @@ int smb2_read(struct ksmbd_work *work)
+ 	length = le32_to_cpu(req->Length);
+ 	mincount = le32_to_cpu(req->MinimumCount);
+
++	/* An RDMA channel must transfer at least one byte: Length == 0
++	 * would feed buflen == 0 (and a ZERO_SIZE_PTR buffer) into the
++	 * SMBDirect xmit path, which blocks forever. Reject it up front.
++	 */
++	if (is_rdma_channel && !length) {
++		err = -EINVAL;
++		goto out;
++	}
+ 	if (length > max_read_size) {
+ 		ksmbd_debug(SMB, "limiting read size to max size(%u)\n",
+ 			    max_read_size);
+@@ -7734,6 +7742,14 @@ int smb2_write(struct ksmbd_work *work)
+ 		async_interim = true;
+ 	}
+
++	/* An RDMA channel must transfer at least one byte: RemainingBytes
++	 * == 0 would feed buflen == 0 (and a ZERO_SIZE_PTR buffer) into
++	 * the SMBDirect xmit path, which blocks forever. Reject it up front.
++	 */
++	if (is_rdma_channel && !length) {
++		err = -EINVAL;
++		goto out;
++	}
+ 	if (length > max_write_size) {
+ 		ksmbd_debug(SMB, "limiting write size to max size(%u)\n",
+ 			    max_write_size);
+diff --git a/fs/smb/smbdirect/rw.c b/fs/smb/smbdirect/rw.c
+index 6fe38042cfb9..6ff0841eb65b 100644
+--- a/fs/smb/smbdirect/rw.c
++++ b/fs/smb/smbdirect/rw.c
+@@ -154,6 +154,17 @@ int smbdirect_connection_rdma_xmit(struct smbdirect_socket *sc,
+ 		desc_num++;
+ 	}
+
++	/*
++	 * No descriptors were walked. If buf_len == 0 this is a legitimate
++	 * zero-length no-op and must return success: msg_list would otherwise
++	 * stay empty, so the later list_last_entry()/wait_for_completion()
++	 * would dereference an empty list head and block forever on a
++	 * completion that is never signalled (no WR is posted -> no CQE).
++	 * buf_len > 0 with no descriptors is a caller error.
++	 */
++	if (!desc_num)
++		return buf_len ? -EINVAL : 0;
++
+ 	smbdirect_log_rdma_rw(sc, SMBDIRECT_LOG_INFO,
+ 		"RDMA %s, len %zu, needed credits %d\n",
+ 		str_read_write(is_read), buf_len, credits_needed);
+--
+2.45.0
+

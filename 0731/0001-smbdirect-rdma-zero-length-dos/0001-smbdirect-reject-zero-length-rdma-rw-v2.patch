@@ -1,5 +1,5 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: Haofeng Li <lhf@redhat.com>
+From: Haofeng Li <lihaofeng@kylinos.cn>
 Date: Fri, 31 Jul 2026 12:00:00 +0800
 Subject: [PATCH] smbdirect: reject zero-length RDMA R/W transfers
 
@@ -63,7 +63,8 @@ inside smbdirect_connection_rdma_xmit(); normal RDMA read/write of
 non-zero length is unaffected. With the fix the same request returns
 immediately and the server stays responsive.
 
-Signed-off-by: Haofeng Li <lhf@redhat.com>
+Signed-off-by: Haofeng Li <lihaofeng@kylinos.cn>
+Reviewed-by: ChenXiaoSong <chenxiaosong@kylinos.cn>
 ---
  fs/smb/server/smb2pdu.c | 16 ++++++++++++++++
  fs/smb/smbdirect/rw.c   | 11 +++++++++++

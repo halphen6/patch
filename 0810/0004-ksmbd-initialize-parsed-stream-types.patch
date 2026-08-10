@@ -1,0 +1,48 @@
+From 203f939aeb1cd66711289bf00e0d4e7f05e52028 Mon Sep 17 00:00:00 2001
+From: Haofeng Li <lihaofeng@kylinos.cn>
+Date: Mon, 10 Aug 2026 10:07:28 +0800
+Subject: [PATCH 4/6] ksmbd: initialize parsed stream types
+
+An SMB named stream without an explicit type, such as "file:stream",
+implicitly has type $DATA.  The parser does not update s_type for this
+form.  It sets it only if a second colon introduces an explicit type.
+
+The create caller happens to initialize its variable, but the rename
+caller passes an uninitialized stack value on to the xattr stream-name
+builder.  Its result can therefore depend on stale stack contents.
+
+Initialize the output to DATA_STREAM when parsing begins.  Explicit
+$DATA and $INDEX_ALLOCATION suffixes are still parsed normally.
+
+Reachable over the network from an authenticated client:
+
+  SMB2 SET_INFO
+    -> FILE_RENAME_INFORMATION -> set_rename_info() -> smb2_rename()
+    -> parse_stream_name()                       (s_type left unwritten)
+    -> ksmbd_vfs_xattr_stream_name()             (consumes s_type)
+
+The implicit-type rename form (":stream" or "dir/:stream") is what
+reaches the builder; "file:stream" above illustrates the parser
+semantics rather than the exact request name.
+
+Signed-off-by: Haofeng Li <lihaofeng@kylinos.cn>
+Reviewed-by: ChenXiaoSong <chenxiaosong@kylinos.cn>
+---
+ fs/smb/server/misc.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/fs/smb/server/misc.c b/fs/smb/server/misc.c
+index 2dd91c9e956a..dcecb6631fe9 100644
+--- a/fs/smb/server/misc.c
++++ b/fs/smb/server/misc.c
+@@ -124,6 +124,7 @@ int parse_stream_name(char *filename, char **stream_name, int *s_type)
+ 	bool has_stream_type = false;
+ 
+ 	*stream_name = NULL;
++	*s_type = DATA_STREAM;
+ 	s_name = filename;
+ 	filename = strsep(&s_name, ":");
+ 	ksmbd_debug(SMB, "filename : %s, streams : %s\n", filename, s_name);
+-- 
+2.25.1
+

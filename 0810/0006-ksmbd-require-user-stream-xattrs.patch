@@ -1,0 +1,57 @@
+From 940fc0e4d1ae85404066bd04dc5d1a8d5994551c Mon Sep 17 00:00:00 2001
+From: Haofeng Li <lihaofeng@kylinos.cn>
+Date: Mon, 10 Aug 2026 10:09:32 +0800
+Subject: [PATCH 6/6] ksmbd: require user stream xattrs
+
+get_file_stream_info() assumes every xattr name can contain the full
+"user.DosStream." prefix.  It compares DosStream at a fixed offset
+without first checking the "user." prefix.  A short name can make the
+comparison read past its NUL.  A non-user xattr with matching bytes at
+that offset can be misread using the stream-name offsets.
+
+Check that the xattr name is long enough to contain the encoded stream
+prefix, and require the exact "user.DosStream." prefix before
+interpreting the remainder as a stream name.  This keeps the fixed
+offsets within the xattr name and limits enumeration to the namespace
+used for ksmbd streams.
+
+Reachable over the network from an authenticated client:
+
+  SMB2 QUERY_INFO
+    -> smb2_query_info()
+    -> SMB2_O_INFO_FILE -> smb2_get_info_file()
+    -> FILE_STREAM_INFORMATION -> get_file_stream_info()
+    -> ksmbd_vfs_listxattr(), then strncmp at fixed offset 5 per xattr
+
+Triggering the original misread also needs the file to already carry a
+matching xattr: a name shorter than the fixed offset (typically only on
+filesystems that allow non-standard names, e.g. FUSE), or a non-user
+xattr whose bytes at offset 5 equal "DosStream.".  The remote query path
+itself is reachable; the faulty state requires prior local,
+cross-protocol, or special-backend-filesystem setup.
+
+Signed-off-by: Haofeng Li <lihaofeng@kylinos.cn>
+Reviewed-by: ChenXiaoSong <chenxiaosong@kylinos.cn>
+---
+ fs/smb/server/smb2pdu.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/fs/smb/server/smb2pdu.c b/fs/smb/server/smb2pdu.c
+index 7598d99241aa..ff6f40261a49 100644
+--- a/fs/smb/server/smb2pdu.c
++++ b/fs/smb/server/smb2pdu.c
+@@ -5528,7 +5528,10 @@ static int get_file_stream_info(struct ksmbd_work *work,
+ 
+ 		ksmbd_debug(SMB, "%s, len %d\n", stream_name, streamlen);
+ 
+-		if (strncmp(&stream_name[XATTR_USER_PREFIX_LEN],
++		if (streamlen < XATTR_NAME_STREAM_LEN ||
++		    strncmp(stream_name, XATTR_USER_PREFIX,
++			    XATTR_USER_PREFIX_LEN) ||
++		    strncmp(&stream_name[XATTR_USER_PREFIX_LEN],
+ 			    STREAM_PREFIX, STREAM_PREFIX_LEN))
+ 			continue;
+ 
+-- 
+2.25.1
+

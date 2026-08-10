@@ -1,0 +1,51 @@
+From e7521e8249b6e9da4eaad93ab7c8941496a955b8 Mon Sep 17 00:00:00 2001
+From: Haofeng Li <lihaofeng@kylinos.cn>
+Date: Mon, 10 Aug 2026 10:07:45 +0800
+Subject: [PATCH 5/6] ksmbd: require exact stream type names
+
+parse_stream_name() uses prefix comparisons for $DATA and
+$INDEX_ALLOCATION.  It consequently accepts trailing-character variants
+such as $DATAfoo or $INDEX_ALLOCATION_suffix and assigns them the type
+named by the matching prefix.
+
+For the two stream types supported by this parser, compare the entire
+type component with strcasecmp().  This preserves the existing
+case-insensitive behavior while rejecting trailing characters.
+
+Reachable over the network from an authenticated client; these are the
+only two callers of parse_stream_name():
+
+  SMB2 CREATE ("file:stream:$DATAfoo")
+    -> smb2_open() -> parse_stream_name()
+
+  SMB2 SET_INFO
+    -> FILE_RENAME_INFORMATION -> smb2_rename() -> parse_stream_name()
+
+Changing the common parser therefore covers both paths.
+
+Signed-off-by: Haofeng Li <lihaofeng@kylinos.cn>
+Reviewed-by: ChenXiaoSong <chenxiaosong@kylinos.cn>
+---
+ fs/smb/server/misc.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/fs/smb/server/misc.c b/fs/smb/server/misc.c
+index dcecb6631fe9..a69f34470595 100644
+--- a/fs/smb/server/misc.c
++++ b/fs/smb/server/misc.c
+@@ -140,10 +140,10 @@ int parse_stream_name(char *filename, char **stream_name, int *s_type)
+ 
+ 		ksmbd_debug(SMB, "stream name : %s, stream type : %s\n", s_name,
+ 			    stream_type);
+-		if (!strncasecmp("$data", stream_type, 5)) {
++		if (!strcasecmp("$data", stream_type)) {
+ 			*s_type = DATA_STREAM;
+ 			has_stream_type = true;
+-		} else if (!strncasecmp("$index_allocation", stream_type, 17)) {
++		} else if (!strcasecmp("$index_allocation", stream_type)) {
+ 			*s_type = DIR_STREAM;
+ 			has_stream_type = true;
+ 		} else {
+-- 
+2.25.1
+

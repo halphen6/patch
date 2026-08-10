@@ -1,0 +1,153 @@
+From 5a3409b05a651792474751d02cc994d15e9d157a Mon Sep 17 00:00:00 2001
+From: Haofeng Li <lihaofeng@kylinos.cn>
+Date: Fri, 7 Aug 2026 15:16:54 +0800
+Subject: [PATCH 2/6] ksmbd: enforce append-only writes
+
+smb2_write() currently lets FILE_READ_ATTRIBUTES pass its initial write
+access check but excludes FILE_APPEND_DATA.  The VFS helper rejects the
+metadata-only handle again, so this does not permit a data write, but the
+handler check is still wrong.  It also rejects a valid append-only
+handle.
+
+Check FILE_WRITE_DATA and FILE_APPEND_DATA instead.  When a handle has
+append access without ordinary write access, open regular files with
+O_APPEND so the VFS ignores the client-provided offset.
+
+Alternate data streams are stored as xattrs and updated with a
+read-modify-write sequence, so O_APPEND cannot implement their append
+semantics.  Add a stream mutex on the ksmbd_inode to serialize that
+sequence.  For append-only handles, read the current xattr length under
+the lock.  Use it as the write position before enforcing the limit.
+This serializes concurrent calls to ksmbd_vfs_stream_write() that share
+the same ksmbd_inode.
+
+Reachable over the network from an authenticated client:
+
+  SMB2 CREATE (FILE_APPEND_DATA without FILE_WRITE_DATA)
+    -> smb2_create_open_flags()
+    -> O_APPEND
+  SMB2 WRITE
+    -> smb2_write()
+    -> FILE_WRITE_DATA | FILE_APPEND_DATA check
+    -> ksmbd_vfs_write()
+         regular file -> kernel_write() (VFS honors O_APPEND)
+         named stream -> ksmbd_vfs_stream_write()
+                           -> stream_lock + read-modify-write xattr
+
+The ksmbd_inode cache is keyed by dentry, so two hard links of the same
+inode get distinct ksmbd_inode objects and distinct stream mutexes.  The
+serialization therefore covers concurrent writes reached through the
+same dentry, not cross-hard-link races on the shared xattr.
+
+Fixes: e2f34481b24d ("cifsd: add server-side procedures for SMB3")
+Fixes: f44158485826 ("cifsd: add file operations")
+Signed-off-by: Haofeng Li <lihaofeng@kylinos.cn>
+Reviewed-by: ChenXiaoSong <chenxiaosong@kylinos.cn>
+---
+ fs/smb/server/smb2pdu.c   |  4 +++-
+ fs/smb/server/vfs.c       | 23 ++++++++++++++++-------
+ fs/smb/server/vfs_cache.c |  1 +
+ fs/smb/server/vfs_cache.h |  1 +
+ 4 files changed, 21 insertions(+), 8 deletions(-)
+
+diff --git a/fs/smb/server/smb2pdu.c b/fs/smb/server/smb2pdu.c
+index 220d5850f96c..ec92745d18d4 100644
+--- a/fs/smb/server/smb2pdu.c
++++ b/fs/smb/server/smb2pdu.c
+@@ -2405,6 +2405,8 @@ static int smb2_create_open_flags(bool file_present, __le32 access,
+ 		oflags |= O_RDONLY;
+ 		*may_flags = MAY_OPEN | MAY_READ;
+ 	}
++	if (access & FILE_APPEND_DATA_LE && !(access & FILE_WRITE_DATA_LE))
++		oflags |= O_APPEND;
+ 
+ 	if (access == FILE_READ_ATTRIBUTES_LE || S_ISBLK(mode) || S_ISCHR(mode))
+ 		oflags |= O_PATH;
+@@ -7715,7 +7717,7 @@ int smb2_write(struct ksmbd_work *work)
+ 		goto out;
+ 	}
+ 
+-	if (!(fp->daccess & (FILE_WRITE_DATA_LE | FILE_READ_ATTRIBUTES_LE))) {
++	if (!(fp->daccess & (FILE_WRITE_DATA_LE | FILE_APPEND_DATA_LE))) {
+ 		pr_err("Not permitted to write : 0x%x\n", fp->daccess);
+ 		err = -EACCES;
+ 		goto out;
+diff --git a/fs/smb/server/vfs.c b/fs/smb/server/vfs.c
+index d324585c0566..787edb35bb67 100644
+--- a/fs/smb/server/vfs.c
++++ b/fs/smb/server/vfs.c
+@@ -395,17 +395,12 @@ static int ksmbd_vfs_stream_write(struct ksmbd_file *fp, char *buf, loff_t *pos,
+ 	ksmbd_debug(VFS, "write stream data pos : %llu, count : %zd\n",
+ 		    *pos, count);
+ 
+-	if (*pos >= XATTR_SIZE_MAX) {
++	if (!(fp->filp->f_flags & O_APPEND) && *pos >= XATTR_SIZE_MAX) {
+ 		pr_err("stream write position %lld is out of bounds\n",	*pos);
+ 		return -EINVAL;
+ 	}
+ 
+-	size = *pos + count;
+-	if (size > XATTR_SIZE_MAX) {
+-		size = XATTR_SIZE_MAX;
+-		count = XATTR_SIZE_MAX - *pos;
+-	}
+-
++	mutex_lock(&fp->f_ci->stream_lock);
+ 	saved_cred = override_creds(fp->filp->f_cred);
+ 	v_len = ksmbd_vfs_getcasexattr(idmap,
+ 				       fp->filp->f_path.dentry,
+@@ -417,6 +412,19 @@ static int ksmbd_vfs_stream_write(struct ksmbd_file *fp, char *buf, loff_t *pos,
+ 		err = v_len;
+ 		goto out_revert;
+ 	}
++	if (fp->filp->f_flags & O_APPEND)
++		*pos = v_len;
++	if (*pos >= XATTR_SIZE_MAX) {
++		pr_err("stream write position %lld is out of bounds\n", *pos);
++		err = -EINVAL;
++		goto out_revert;
++	}
++
++	size = *pos + count;
++	if (size > XATTR_SIZE_MAX) {
++		size = XATTR_SIZE_MAX;
++		count = XATTR_SIZE_MAX - *pos;
++	}
+ 
+ 	if (v_len < size) {
+ 		wbuf = kvzalloc(size, KSMBD_DEFAULT_GFP);
+@@ -449,6 +457,7 @@ static int ksmbd_vfs_stream_write(struct ksmbd_file *fp, char *buf, loff_t *pos,
+ 	err = 0;
+ out:
+ 	kvfree(stream_buf);
++	mutex_unlock(&fp->f_ci->stream_lock);
+ 	return err;
+ }
+ 
+diff --git a/fs/smb/server/vfs_cache.c b/fs/smb/server/vfs_cache.c
+index a141025581af..9ee11dfbf3f4 100644
+--- a/fs/smb/server/vfs_cache.c
++++ b/fs/smb/server/vfs_cache.c
+@@ -319,6 +319,7 @@ static int ksmbd_inode_init(struct ksmbd_inode *ci, struct ksmbd_file *fp)
+ 	INIT_LIST_HEAD(&ci->m_fp_list);
+ 	INIT_LIST_HEAD(&ci->m_op_list);
+ 	init_rwsem(&ci->m_lock);
++	mutex_init(&ci->stream_lock);
+ 	ci->m_de = fp->filp->f_path.dentry;
+ 	return 0;
+ }
+diff --git a/fs/smb/server/vfs_cache.h b/fs/smb/server/vfs_cache.h
+index b9e27307a26c..5f51dcf33780 100644
+--- a/fs/smb/server/vfs_cache.h
++++ b/fs/smb/server/vfs_cache.h
+@@ -56,6 +56,7 @@ struct stream {
+ 
+ struct ksmbd_inode {
+ 	struct rw_semaphore		m_lock;
++	struct mutex			stream_lock;
+ 	atomic_t			m_count;
+ 	atomic_t			op_count;
+ 	/* opinfo count for streams */
+-- 
+2.25.1
+

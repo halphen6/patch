@@ -1,0 +1,78 @@
+From a2f9154601c6a4830c5ad87ecb9d6a52ae940855 Mon Sep 17 00:00:00 2001
+From: Haofeng Li <lihaofeng@kylinos.cn>
+Date: Mon, 10 Aug 2026 10:03:29 +0800
+Subject: [PATCH 3/6] ksmbd: handle link speed query failures
+
+FSCTL_QUERY_NETWORK_INTERFACE_INFO obtains each interface speed through
+get_link_ksettings().  The return value was ignored, so on failure the
+uninitialized link settings could yield a garbage speed.  The callback
+can also succeed while reporting SPEED_UNKNOWN, which then becomes a
+nonsensical LinkSpeed after the bps conversion.
+
+Query the settings through __ethtool_get_link_ksettings().  The helper
+zero-initializes the settings and provides the netdev ops locking needed
+by a caller that holds only rtnl_lock().  Honor query failures and ignore
+SPEED_UNKNOWN.  Reset the state for every interface and retain the
+existing 1 Gbit/s default in all other cases.
+
+Reachable over the network from an authenticated client:
+
+  SMB2 IOCTL
+    -> FSCTL_QUERY_NETWORK_INTERFACE_INFO
+    -> fsctl_query_iface_info_ioctl()
+         -> rtnl_lock()
+         -> for_each_netdev
+              (non-loopback, on the ksmbd iface list, IFF_RUNNING)
+              -> __ethtool_get_link_ksettings()
+
+IFF_RUNNING does not guarantee a known physical speed: auto-negotiation,
+virtual devices, or driver trouble can return an error or SPEED_UNKNOWN,
+which is the normal interface query SMB3 clients issue.
+
+Signed-off-by: Haofeng Li <lihaofeng@kylinos.cn>
+Reviewed-by: ChenXiaoSong <chenxiaosong@kylinos.cn>
+---
+ fs/smb/server/smb2pdu.c | 15 ++++++++++-----
+ 1 file changed, 10 insertions(+), 5 deletions(-)
+
+diff --git a/fs/smb/server/smb2pdu.c b/fs/smb/server/smb2pdu.c
+index ec92745d18d4..7598d99241aa 100644
+--- a/fs/smb/server/smb2pdu.c
++++ b/fs/smb/server/smb2pdu.c
+@@ -8573,10 +8573,15 @@ static int fsctl_query_iface_info_ioctl(struct ksmbd_conn *conn,
+ 	struct sockaddr_storage_rsp *sockaddr_storage;
+ 	unsigned int flags;
+ 	unsigned long long speed;
++	bool have_speed = false;
+ 
+ 	rtnl_lock();
+ 	for_each_netdev(&init_net, netdev) {
++		struct ethtool_link_ksettings cmd;
+ 		bool ipv4_set = false;
++		int ret;
++
++		have_speed = false;
+ 
+ 		if (netdev->type == ARPHRD_LOOPBACK)
+ 			continue;
+@@ -8607,12 +8612,12 @@ static int fsctl_query_iface_info_ioctl(struct ksmbd_conn *conn,
+ 		nii_rsp->Next = cpu_to_le32(152);
+ 		nii_rsp->Reserved = 0;
+ 
+-		if (netdev->ethtool_ops->get_link_ksettings) {
+-			struct ethtool_link_ksettings cmd;
+-
+-			netdev->ethtool_ops->get_link_ksettings(netdev, &cmd);
++		ret = __ethtool_get_link_ksettings(netdev, &cmd);
++		if (!ret && cmd.base.speed != SPEED_UNKNOWN) {
+ 			speed = cmd.base.speed;
+-		} else {
++			have_speed = true;
++		}
++		if (!have_speed) {
+ 			ksmbd_debug(SMB, "%s %s\n", netdev->name,
+ 				    "speed is unknown, defaulting to 1Gb/sec");
+ 			speed = SPEED_1000;
+-- 
+2.25.1
+

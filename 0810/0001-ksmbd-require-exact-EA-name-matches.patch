@@ -1,0 +1,55 @@
+From 016118faafdf3b4ec95af7dcac24ff3f78c8a9c1 Mon Sep 17 00:00:00 2001
+From: Haofeng Li <lihaofeng@kylinos.cn>
+Date: Fri, 7 Aug 2026 15:15:18 +0800
+Subject: [PATCH 1/6] ksmbd: require exact EA name matches
+
+smb2_get_ea() uses the request's EaNameLength as the length of a
+strncmp() against each eligible user xattr name without first requiring
+the candidate name to have the same length.  A request for "foo" can
+therefore match "user.foobar" and return the name and value of a
+different EA.
+
+Require the xattr name to contain exactly the "user." prefix followed by
+EaNameLength bytes before comparing the requested bytes.  Compare exactly
+EaNameLength bytes with memcmp(); EaNameLength excludes the required
+terminating NUL.
+
+Reachable over the network from an authenticated client:
+
+  SMB2 QUERY_INFO
+    -> smb2_query_info()
+    -> SMB2_O_INFO_FILE -> smb2_get_info_file()
+    -> FILE_FULL_EA_INFORMATION -> smb2_get_ea()
+    -> ksmbd_vfs_listxattr(), then strncmp(EaNameLength) per eligible EA
+
+Preconditions: a valid FileId, a handle carrying FILE_READ_EA, and a
+file holding an eligible, non-internal user.* xattr whose name extends
+the requested prefix.  The request bounds checks ensure that
+EaNameLength name bytes are present, so memcmp() cannot read out of
+bounds.
+
+Signed-off-by: Haofeng Li <lihaofeng@kylinos.cn>
+Reviewed-by: ChenXiaoSong <chenxiaosong@kylinos.cn>
+---
+ fs/smb/server/smb2pdu.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/fs/smb/server/smb2pdu.c b/fs/smb/server/smb2pdu.c
+index 76f63f9adc72..220d5850f96c 100644
+--- a/fs/smb/server/smb2pdu.c
++++ b/fs/smb/server/smb2pdu.c
+@@ -5206,8 +5206,9 @@ static int smb2_get_ea(struct ksmbd_work *work, struct ksmbd_file *fp,
+ 			continue;
+ 
+ 		if (req->InputBufferLength &&
+-		    strncmp(&name[XATTR_USER_PREFIX_LEN], ea_req->name,
+-			    ea_req->EaNameLength))
++		    (name_len != XATTR_USER_PREFIX_LEN + ea_req->EaNameLength ||
++		     memcmp(&name[XATTR_USER_PREFIX_LEN], ea_req->name,
++			    ea_req->EaNameLength)))
+ 			continue;
+ 
+ 		if (!strncmp(&name[XATTR_USER_PREFIX_LEN],
+-- 
+2.25.1
+

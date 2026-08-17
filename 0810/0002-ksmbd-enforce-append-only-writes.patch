@@ -1,7 +1,7 @@
-From 5a3409b05a651792474751d02cc994d15e9d157a Mon Sep 17 00:00:00 2001
+From c707ef8264b47e8e414011364ee0d44327119cd2 Mon Sep 17 00:00:00 2001
 From: Haofeng Li <lihaofeng@kylinos.cn>
 Date: Fri, 7 Aug 2026 15:16:54 +0800
-Subject: [PATCH 2/6] ksmbd: enforce append-only writes
+Subject: [PATCH] ksmbd: enforce append-only writes
 
 smb2_write() currently lets FILE_READ_ATTRIBUTES pass its initial write
 access check but excludes FILE_APPEND_DATA.  The VFS helper rejects the
@@ -51,10 +51,10 @@ Reviewed-by: ChenXiaoSong <chenxiaosong@kylinos.cn>
  4 files changed, 21 insertions(+), 8 deletions(-)
 
 diff --git a/fs/smb/server/smb2pdu.c b/fs/smb/server/smb2pdu.c
-index 220d5850f96c..ec92745d18d4 100644
+index 32c57fd1cefd..6e95bf08b7dd 100644
 --- a/fs/smb/server/smb2pdu.c
 +++ b/fs/smb/server/smb2pdu.c
-@@ -2405,6 +2405,8 @@ static int smb2_create_open_flags(bool file_present, __le32 access,
+@@ -2774,6 +2774,8 @@ static int smb2_create_open_flags(bool file_present, __le32 access,
  		oflags |= O_RDONLY;
  		*may_flags = MAY_OPEN | MAY_READ;
  	}
@@ -63,7 +63,7 @@ index 220d5850f96c..ec92745d18d4 100644
  
  	if (access == FILE_READ_ATTRIBUTES_LE || S_ISBLK(mode) || S_ISCHR(mode))
  		oflags |= O_PATH;
-@@ -7715,7 +7717,7 @@ int smb2_write(struct ksmbd_work *work)
+@@ -8854,7 +8856,7 @@ int smb2_write(struct ksmbd_work *work)
  		goto out;
  	}
  
@@ -73,10 +73,10 @@ index 220d5850f96c..ec92745d18d4 100644
  		err = -EACCES;
  		goto out;
 diff --git a/fs/smb/server/vfs.c b/fs/smb/server/vfs.c
-index d324585c0566..787edb35bb67 100644
+index 286536f75144..91af908899dd 100644
 --- a/fs/smb/server/vfs.c
 +++ b/fs/smb/server/vfs.c
-@@ -395,17 +395,12 @@ static int ksmbd_vfs_stream_write(struct ksmbd_file *fp, char *buf, loff_t *pos,
+@@ -392,17 +392,12 @@ static int ksmbd_vfs_stream_write(struct ksmbd_file *fp, char *buf, loff_t *pos,
  	ksmbd_debug(VFS, "write stream data pos : %llu, count : %zd\n",
  		    *pos, count);
  
@@ -96,7 +96,7 @@ index d324585c0566..787edb35bb67 100644
  	saved_cred = override_creds(fp->filp->f_cred);
  	v_len = ksmbd_vfs_getcasexattr(idmap,
  				       fp->filp->f_path.dentry,
-@@ -417,6 +412,19 @@ static int ksmbd_vfs_stream_write(struct ksmbd_file *fp, char *buf, loff_t *pos,
+@@ -414,6 +409,19 @@ static int ksmbd_vfs_stream_write(struct ksmbd_file *fp, char *buf, loff_t *pos,
  		err = v_len;
  		goto out_revert;
  	}
@@ -116,7 +116,7 @@ index d324585c0566..787edb35bb67 100644
  
  	if (v_len < size) {
  		wbuf = kvzalloc(size, KSMBD_DEFAULT_GFP);
-@@ -449,6 +457,7 @@ static int ksmbd_vfs_stream_write(struct ksmbd_file *fp, char *buf, loff_t *pos,
+@@ -446,6 +454,7 @@ static int ksmbd_vfs_stream_write(struct ksmbd_file *fp, char *buf, loff_t *pos,
  	err = 0;
  out:
  	kvfree(stream_buf);
@@ -125,10 +125,10 @@ index d324585c0566..787edb35bb67 100644
  }
  
 diff --git a/fs/smb/server/vfs_cache.c b/fs/smb/server/vfs_cache.c
-index a141025581af..9ee11dfbf3f4 100644
+index 972e8985a503..52faf4e4e73f 100644
 --- a/fs/smb/server/vfs_cache.c
 +++ b/fs/smb/server/vfs_cache.c
-@@ -319,6 +319,7 @@ static int ksmbd_inode_init(struct ksmbd_inode *ci, struct ksmbd_file *fp)
+@@ -425,6 +425,7 @@ static int ksmbd_inode_init(struct ksmbd_inode *ci, struct ksmbd_file *fp)
  	INIT_LIST_HEAD(&ci->m_fp_list);
  	INIT_LIST_HEAD(&ci->m_op_list);
  	init_rwsem(&ci->m_lock);
@@ -137,7 +137,7 @@ index a141025581af..9ee11dfbf3f4 100644
  	return 0;
  }
 diff --git a/fs/smb/server/vfs_cache.h b/fs/smb/server/vfs_cache.h
-index b9e27307a26c..5f51dcf33780 100644
+index 5cac022b540b..41a0c5dcbf32 100644
 --- a/fs/smb/server/vfs_cache.h
 +++ b/fs/smb/server/vfs_cache.h
 @@ -56,6 +56,7 @@ struct stream {

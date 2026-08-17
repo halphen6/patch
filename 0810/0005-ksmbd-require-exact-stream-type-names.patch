@@ -1,7 +1,7 @@
-From e7521e8249b6e9da4eaad93ab7c8941496a955b8 Mon Sep 17 00:00:00 2001
+From 2b0d02375d6902930c48f77120d824ff04de0832 Mon Sep 17 00:00:00 2001
 From: Haofeng Li <lihaofeng@kylinos.cn>
 Date: Mon, 10 Aug 2026 10:07:45 +0800
-Subject: [PATCH 5/6] ksmbd: require exact stream type names
+Subject: [PATCH] ksmbd: require exact stream type names
 
 parse_stream_name() uses prefix comparisons for $DATA and
 $INDEX_ALLOCATION.  It consequently accepts trailing-character variants

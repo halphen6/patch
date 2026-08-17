@@ -1,7 +1,7 @@
-From a2f9154601c6a4830c5ad87ecb9d6a52ae940855 Mon Sep 17 00:00:00 2001
+From 5407c55583bc53a250beb747d070381ff3f90403 Mon Sep 17 00:00:00 2001
 From: Haofeng Li <lihaofeng@kylinos.cn>
 Date: Mon, 10 Aug 2026 10:03:29 +0800
-Subject: [PATCH 3/6] ksmbd: handle link speed query failures
+Subject: [PATCH] ksmbd: handle link speed query failures
 
 FSCTL_QUERY_NETWORK_INTERFACE_INFO obtains each interface speed through
 get_link_ksettings().  The return value was ignored, so on failure the
@@ -36,10 +36,10 @@ Reviewed-by: ChenXiaoSong <chenxiaosong@kylinos.cn>
  1 file changed, 10 insertions(+), 5 deletions(-)
 
 diff --git a/fs/smb/server/smb2pdu.c b/fs/smb/server/smb2pdu.c
-index ec92745d18d4..7598d99241aa 100644
+index 6e95bf08b7dd..f01c2c8d2ed8 100644
 --- a/fs/smb/server/smb2pdu.c
 +++ b/fs/smb/server/smb2pdu.c
-@@ -8573,10 +8573,15 @@ static int fsctl_query_iface_info_ioctl(struct ksmbd_conn *conn,
+@@ -9769,10 +9769,15 @@ static int fsctl_query_iface_info_ioctl(struct ksmbd_conn *conn,
  	struct sockaddr_storage_rsp *sockaddr_storage;
  	unsigned int flags;
  	unsigned long long speed;
@@ -55,7 +55,7 @@ index ec92745d18d4..7598d99241aa 100644
  
  		if (netdev->type == ARPHRD_LOOPBACK)
  			continue;
-@@ -8607,12 +8612,12 @@ static int fsctl_query_iface_info_ioctl(struct ksmbd_conn *conn,
+@@ -9803,12 +9808,12 @@ static int fsctl_query_iface_info_ioctl(struct ksmbd_conn *conn,
  		nii_rsp->Next = cpu_to_le32(152);
  		nii_rsp->Reserved = 0;
  

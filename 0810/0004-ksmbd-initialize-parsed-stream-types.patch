@@ -1,7 +1,7 @@
-From 203f939aeb1cd66711289bf00e0d4e7f05e52028 Mon Sep 17 00:00:00 2001
+From f5923e35820ebe07f0fccc409896419e69db9005 Mon Sep 17 00:00:00 2001
 From: Haofeng Li <lihaofeng@kylinos.cn>
 Date: Mon, 10 Aug 2026 10:07:28 +0800
-Subject: [PATCH 4/6] ksmbd: initialize parsed stream types
+Subject: [PATCH] ksmbd: initialize parsed stream types
 
 An SMB named stream without an explicit type, such as "file:stream",
 implicitly has type $DATA.  The parser does not update s_type for this

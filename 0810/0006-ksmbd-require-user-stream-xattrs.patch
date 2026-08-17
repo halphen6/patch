@@ -1,7 +1,7 @@
-From 940fc0e4d1ae85404066bd04dc5d1a8d5994551c Mon Sep 17 00:00:00 2001
+From 1cca9db782f55c2bd592870ff4b7ce6ca71ab923 Mon Sep 17 00:00:00 2001
 From: Haofeng Li <lihaofeng@kylinos.cn>
 Date: Mon, 10 Aug 2026 10:09:32 +0800
-Subject: [PATCH 6/6] ksmbd: require user stream xattrs
+Subject: [PATCH] ksmbd: require user stream xattrs
 
 get_file_stream_info() assumes every xattr name can contain the full
 "user.DosStream." prefix.  It compares DosStream at a fixed offset
@@ -37,10 +37,10 @@ Reviewed-by: ChenXiaoSong <chenxiaosong@kylinos.cn>
  1 file changed, 4 insertions(+), 1 deletion(-)
 
 diff --git a/fs/smb/server/smb2pdu.c b/fs/smb/server/smb2pdu.c
-index 7598d99241aa..ff6f40261a49 100644
+index f01c2c8d2ed8..0154348af799 100644
 --- a/fs/smb/server/smb2pdu.c
 +++ b/fs/smb/server/smb2pdu.c
-@@ -5528,7 +5528,10 @@ static int get_file_stream_info(struct ksmbd_work *work,
+@@ -6558,7 +6558,10 @@ static int get_file_stream_info(struct ksmbd_work *work,
  
  		ksmbd_debug(SMB, "%s, len %d\n", stream_name, streamlen);
  
